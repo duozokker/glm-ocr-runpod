@@ -1,4 +1,4 @@
-FROM vllm/vllm-openai:latest
+FROM runpod/worker-v1-vllm:stable-cuda12.1.0
 
 # git is required for pip install from GitHub
 RUN apt-get update && apt-get install -y --no-install-recommends git \
@@ -8,15 +8,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends git \
 RUN pip uninstall -y transformers || true \
     && pip install -U git+https://github.com/huggingface/transformers.git
 
-# Install RunPod SDK for serverless handler
-RUN pip install runpod
-
 # Bake model weights into the image to eliminate cold start downloads (~2 GB)
 ENV HF_HOME=/root/.cache/huggingface
 RUN python3 -c "from huggingface_hub import snapshot_download; snapshot_download('zai-org/GLM-OCR')"
 
-# Copy the root handler so Runpod Hub and the image use the same entrypoint.
-COPY handler.py /handler.py
-
-# RunPod handler starts vLLM internally on port 8000
-CMD ["python3", "-u", "/handler.py"]
+# The worker-v1-vllm image has its own handler — configure via env vars
+ENV MODEL_NAME="zai-org/GLM-OCR"
+ENV GPU_MEMORY_UTILIZATION="0.95"
+ENV MAX_MODEL_LEN="4096"
+ENV DISABLE_LOG_STATS="true"
