@@ -1,6 +1,8 @@
 # GLM-OCR on RunPod Serverless
 
-Deploy [GLM-OCR](https://github.com/zai-org/GLM-OCR) (0.9B) as a serverless OCR endpoint on [RunPod](https://www.runpod.io) with a single Dockerfile. OpenAI-compatible API, auto-scaling from 0 to 100 workers.
+[![Deploy on RunPod](https://badge.runpod.io/cta/deploy-on-runpod-dark.svg)](https://www.runpod.io/console/hub/duozokker/glm-ocr-runpod)
+
+Deploy [GLM-OCR](https://github.com/zai-org/GLM-OCR) (0.9B) as a serverless OCR endpoint on [RunPod](https://www.runpod.io). OpenAI-compatible API, auto-scaling from 0 to 100 workers.
 
 ## Features
 
@@ -234,34 +236,43 @@ RunPod is GDPR-compliant ([SOC 2 Type II](https://www.runpod.io/legal/compliance
 
 ## Configuration
 
+### Environment Variables
+
+Set these in the RunPod endpoint settings to customize behavior:
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `MODEL_NAME` | `zai-org/GLM-OCR` | HuggingFace model ID |
+| `GPU_MEMORY_UTILIZATION` | `0.95` | Fraction of GPU VRAM to use |
+| `MAX_MODEL_LEN` | auto | Maximum context length |
+| `STARTUP_TIMEOUT` | `180` | Seconds to wait for vLLM to start |
+
 ### Customizing vLLM Args
 
-Edit the `CMD` in the Dockerfile to change vLLM settings:
-
-```dockerfile
-CMD [ \
-    "vllm", "serve", "zai-org/GLM-OCR", \
-    "--port", "8080", \
-    "--allowed-local-media-path", "/tmp", \
-    "--gpu-memory-utilization", "0.95", \
-    "--max-model-len", "16384", \
-    "--dtype", "bfloat16", \
-    "--speculative-config", "{\"method\": \"mtp\", \"num_speculative_tokens\": 1}" \
-]
-```
-
-After editing, push to GitHub and create a new release to trigger a rebuild.
+For deeper customization, edit `handler.py` — the vLLM server command is built in `start_vllm()`. Push to GitHub and create a new release to trigger a rebuild.
 
 ## How It Works
 
+```
+┌─────────────────────────────────────────────────────┐
+│  RunPod Worker Container                            │
+│                                                     │
+│  handler.py (RunPod SDK)                            │
+│    │                                                │
+│    ├── Starts vLLM server on localhost:8000          │
+│    ├── Waits for /health to return 200              │
+│    └── Forwards jobs to vLLM's OpenAI API           │
+│                                                     │
+│  vLLM Server (localhost:8000)                       │
+│    └── Serves zai-org/GLM-OCR with MTP speculation  │
+└─────────────────────────────────────────────────────┘
+```
+
 The Dockerfile:
 1. Starts from `vllm/vllm-openai:nightly` (vLLM + CUDA runtime)
-2. Installs `git` (needed to pip install from GitHub)
-3. Upgrades `transformers` to v5+ dev branch (required by GLM-OCR)
-4. Bakes model weights (~2 GB) into the image (no download at cold start)
-5. Serves via vLLM with MTP speculation for ~50% faster inference
-
-Final image size: ~10.5 GB.
+2. Installs `git`, `transformers` from main branch, and `runpod` SDK
+3. Bakes model weights (~2 GB) into the image
+4. Runs `handler.py` which starts vLLM and accepts RunPod jobs
 
 > **Reproducibility:** The build uses floating tags (`nightly`, Git HEAD). For reproducible
 > builds, pin `vllm/vllm-openai:<specific-tag>` and a transformers commit hash.

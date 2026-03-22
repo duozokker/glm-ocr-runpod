@@ -1,0 +1,59 @@
+{
+    "title": "GLM-OCR",
+    "description": "Fast, accurate OCR powered by GLM-OCR (0.9B). Supports text recognition, formula recognition, table recognition, and structured information extraction via JSON schema. OpenAI-compatible API with Multi-Token Prediction for ~50% faster inference.",
+    "type": "serverless",
+    "category": "image",
+    "config": {
+        "runsOn": "GPU",
+        "containerDiskInGb": 20,
+        "gpuCount": 1,
+        "gpuIds": "ADA_16,ADA_24,RTX A4000,RTX A5000,NVIDIA L4,NVIDIA RTX 4000 Ada Generation",
+        "allowedCudaVersions": ["12.1", "12.4", "12.6"]
+    },
+    "env": [
+        {
+            "key": "MODEL_NAME",
+            "input": {
+                "type": "string",
+                "name": "Model Name",
+                "description": "HuggingFace model ID",
+                "default": "zai-org/GLM-OCR",
+                "advanced": true
+            }
+        },
+        {
+            "key": "GPU_MEMORY_UTILIZATION",
+            "input": {
+                "type": "string",
+                "name": "GPU Memory Utilization",
+                "description": "Fraction of GPU memory to use (0.0 - 1.0)",
+                "default": "0.95",
+                "advanced": true
+            }
+        },
+        {
+            "key": "MAX_MODEL_LEN",
+            "input": {
+                "type": "string",
+                "name": "Max Model Length",
+                "description": "Maximum context length (leave empty for auto)",
+                "default": "",
+                "advanced": true
+            }
+        }
+    ],
+    "presets": [
+        {
+            "name": "Text Recognition",
+            "defaults": {}
+        },
+        {
+            "name": "Table Recognition",
+            "defaults": {}
+        },
+        {
+            "name": "Formula Recognition",
+            "defaults": {}
+        }
+    ]
+}

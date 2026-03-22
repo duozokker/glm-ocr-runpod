@@ -1,0 +1,63 @@
+{
+    "tests": [
+        {
+            "name": "text_recognition",
+            "input": {
+                "openai_route": "/v1/chat/completions",
+                "openai_input": {
+                    "model": "zai-org/GLM-OCR",
+                    "max_tokens": 4096,
+                    "temperature": 0.01,
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": [
+                                {
+                                    "type": "image_url",
+                                    "image_url": {
+                                        "url": "https://upload.wikimedia.org/wikipedia/commons/thumb/a/a5/Tsunami_by_hokusai_19th_century.jpg/800px-Tsunami_by_hokusai_19th_century.jpg"
+                                    }
+                                },
+                                {
+                                    "type": "text",
+                                    "text": "Text Recognition:"
+                                }
+                            ]
+                        }
+                    ]
+                }
+            },
+            "timeout": 120000
+        },
+        {
+            "name": "direct_messages_format",
+            "input": {
+                "model": "zai-org/GLM-OCR",
+                "max_tokens": 4096,
+                "temperature": 0.01,
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "image_url",
+                                "image_url": {
+                                    "url": "https://upload.wikimedia.org/wikipedia/commons/thumb/a/a5/Tsunami_by_hokusai_19th_century.jpg/800px-Tsunami_by_hokusai_19th_century.jpg"
+                                }
+                            },
+                            {
+                                "type": "text",
+                                "text": "Text Recognition:"
+                            }
+                        ]
+                    }
+                ]
+            },
+            "timeout": 120000
+        }
+    ],
+    "config": {
+        "gpuTypeId": "ADA_16",
+        "gpuCount": 1
+    }
+}

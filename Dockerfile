@@ -8,18 +8,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends git \
 RUN pip uninstall -y transformers || true \
     && pip install -U git+https://github.com/huggingface/transformers.git
 
+# Install RunPod SDK for serverless handler
+RUN pip install runpod
+
 # Bake model weights into the image to eliminate cold start downloads (~2 GB)
 ENV HF_HOME=/root/.cache/huggingface
 RUN python3 -c "from huggingface_hub import snapshot_download; snapshot_download('zai-org/GLM-OCR')"
 
-EXPOSE 8080
+# Copy handler
+COPY handler.py /handler.py
 
-# Reset ENTRYPOINT in case the base image sets one (ensures CMD runs as-is)
-ENTRYPOINT []
-
-CMD [ \
-    "vllm", "serve", "zai-org/GLM-OCR", \
-    "--port", "8080", \
-    "--gpu-memory-utilization", "0.95", \
-    "--speculative-config", "{\"method\": \"mtp\", \"num_speculative_tokens\": 1}" \
-]
+# RunPod handler starts vLLM internally on port 8000
+CMD ["python3", "/handler.py"]
