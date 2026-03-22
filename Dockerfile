@@ -15,8 +15,8 @@ RUN pip install runpod
 ENV HF_HOME=/root/.cache/huggingface
 RUN python3 -c "from huggingface_hub import snapshot_download; snapshot_download('zai-org/GLM-OCR')"
 
-# Copy handler
-COPY src/handler.py /handler.py
+# Copy the root handler so Runpod Hub and the image use the same entrypoint.
+COPY handler.py /handler.py
 
 # RunPod handler starts vLLM internally on port 8000
 CMD ["python3", "-u", "/handler.py"]
