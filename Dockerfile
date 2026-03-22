@@ -1,4 +1,4 @@
-FROM vllm/vllm-openai:nightly
+FROM vllm/vllm-openai:latest
 
 # git is required for pip install from GitHub
 RUN apt-get update && apt-get install -y --no-install-recommends git \
