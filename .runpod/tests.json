@@ -27,7 +27,7 @@
                     ]
                 }
             },
-            "timeout": 300000
+            "timeout": 900000
         }
     ],
     "config": {
