@@ -417,9 +417,13 @@ def shutdown() -> None:
             process.kill()
 
 
-if __name__ == "__main__":
+def main() -> None:
     threading.Thread(target=startup_worker, daemon=True).start()
     try:
         app.run(host=APP_HOST, port=APP_PORT)
     finally:
         shutdown()
+
+
+if __name__ == "__main__":
+    main()

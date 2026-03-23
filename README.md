@@ -1,4 +1,4 @@
-# GLM-OCR Full Pipeline on RunPod Load Balancing
+# GLM-OCR Full Pipeline on RunPod
 
 Deploy the official self-hosted [GLM-OCR](https://github.com/zai-org/GLM-OCR) pipeline on RunPod with:
 
@@ -8,7 +8,7 @@ Deploy the official self-hosted [GLM-OCR](https://github.com/zai-org/GLM-OCR) pi
 - health and performance metrics
 - benchmark tooling for large PDF sets
 
-This repo is intentionally no longer a queue-based `runpod.serverless.start(...)` worker. It is built for RunPod Load Balancing endpoints where lower latency matters more than pure scale-to-zero behavior.
+This repo is intentionally built around a plain HTTP service instead of a queue-based `runpod.serverless.start(...)` worker. The target deployment mode is RunPod Load Balancing or any always-on/custom HTTP endpoint where lower latency matters more than queue semantics.
 
 ## Why this version
 
@@ -53,6 +53,17 @@ You can also pass `documents` as a list.
 ### `POST /openai/v1/chat/completions`
 
 These routes proxy directly to local `vLLM` for raw model access.
+
+## Why it is simpler
+
+The serving path is intentionally narrow:
+
+1. start `vLLM`
+2. wait for `/health`
+3. start `glmocr[selfhosted]`
+4. expose `/health`, `/metrics`, `/glmocr/parse`
+
+No second OCR provider, no MaaS dependency, no queue worker protocol, no browser-only PDF tricks.
 
 ## RunPod configuration
 
@@ -139,6 +150,8 @@ The benchmark report includes:
 - [glmocr.config.yaml](/Users/schayan/Dev/GLM-5-OCR-Runpod/glmocr.config.yaml)
 - [benchmark_datev.py](/Users/schayan/Dev/GLM-5-OCR-Runpod/benchmark_datev.py)
 - [Dockerfile](/Users/schayan/Dev/GLM-5-OCR-Runpod/Dockerfile)
+- [CHANGELOG.md](/Users/schayan/Dev/GLM-5-OCR-Runpod/CHANGELOG.md)
+- [X_POST_DRAFT.md](/Users/schayan/Dev/GLM-5-OCR-Runpod/X_POST_DRAFT.md)
 
 ## Notes
 

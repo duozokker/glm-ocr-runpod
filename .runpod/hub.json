@@ -1,6 +1,6 @@
 {
-    "title": "GLM-OCR",
-    "description": "Fast, accurate OCR powered by GLM-OCR (0.9B). Supports text recognition, formula recognition, table recognition, and structured information extraction via JSON schema. OpenAI-compatible API with Multi-Token Prediction for ~50% faster inference.",
+    "title": "GLM-OCR Full Pipeline",
+    "description": "Self-hosted GLM-OCR on RunPod with the official PDF/layout pipeline, OpenAI-compatible raw OCR access, health/metrics endpoints, and model preloading for faster startup.",
     "type": "serverless",
     "category": "image",
     "config": {
@@ -18,6 +18,16 @@
                 "name": "Model Name",
                 "description": "HuggingFace model ID",
                 "default": "zai-org/GLM-OCR",
+                "advanced": true
+            }
+        },
+        {
+            "key": "SERVED_MODEL_NAME",
+            "input": {
+                "type": "string",
+                "name": "Served Model Name",
+                "description": "Model name exposed by vLLM",
+                "default": "glm-ocr",
                 "advanced": true
             }
         },
@@ -40,19 +50,25 @@
                 "default": "",
                 "advanced": true
             }
+        },
+        {
+            "key": "GLMOCR_LAYOUT_DEVICE",
+            "input": {
+                "type": "string",
+                "name": "Layout Device",
+                "description": "Use cpu to keep GPU RAM focused on OCR inference",
+                "default": "cpu",
+                "advanced": true
+            }
         }
     ],
     "presets": [
         {
-            "name": "Text Recognition",
+            "name": "Full PDF OCR",
             "defaults": {}
         },
         {
-            "name": "Table Recognition",
-            "defaults": {}
-        },
-        {
-            "name": "Formula Recognition",
+            "name": "Low-Latency Raw OCR",
             "defaults": {}
         }
     ]

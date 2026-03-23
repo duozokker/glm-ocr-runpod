@@ -41,8 +41,15 @@ pipeline:
     pdf_max_pages: null
     pdf_verbose: false
     default_prompt: >
-      Recognize the text in the image and output in Markdown format.
-      Preserve the original layout and do not invent content.
+      Extract every visible piece of text from this page as faithfully as possible.
+      Do not omit titles, subtitles, headers, footers, labels, captions, footnotes,
+      notes, side text, or text near or around tables.
+      Preserve the document structure and formatting semantics whenever they are
+      visually identifiable, including headings, paragraphs, lists, emphasis,
+      code blocks, formulas, and table content.
+      Respond in Markdown whenever possible. Use HTML only when Markdown cannot
+      preserve the layout well enough. Keep text in reading order and do not
+      invent content that is not visibly present.
 
   result_formatter:
     filter_nested: true
