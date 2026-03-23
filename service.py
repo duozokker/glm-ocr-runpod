@@ -1,4 +1,3 @@
-import json
 import os
 import subprocess
 import sys
@@ -10,9 +9,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+import pypdfium2 as pdfium
 import requests
 from flask import Flask, Response, jsonify, request
 from glmocr import GlmOcr
+from prompts import SINGLE_OCR_PROMPT
 
 
 APP_HOST = os.getenv("APP_HOST", "0.0.0.0")
@@ -26,6 +27,7 @@ REQUEST_TIMEOUT = int(os.getenv("REQUEST_TIMEOUT", "900"))
 GLMOCR_CONFIG_PATH = os.getenv("GLMOCR_CONFIG_PATH", "/app/glmocr.config.yaml")
 GLMOCR_LAYOUT_DEVICE = os.getenv("GLMOCR_LAYOUT_DEVICE", "cpu")
 HEALTH_POLL_INTERVAL = float(os.getenv("HEALTH_POLL_INTERVAL", "1.0"))
+SINGLE_OCR_PDF_DPI = int(os.getenv("SINGLE_OCR_PDF_DPI", "180"))
 
 
 def env_flag(name: str, default: bool = False) -> bool:
@@ -186,12 +188,9 @@ def build_vllm_command() -> list[str]:
     if env_flag("TRUST_REMOTE_CODE", True):
         cmd.append("--trust-remote-code")
 
-    speculative = os.getenv(
-        "SPECULATIVE_CONFIG",
-        '{"method":"mtp","num_speculative_tokens":1}',
-    )
-    if speculative:
-        cmd.extend(["--speculative-config", speculative])
+    if env_flag("ENABLE_MTP", True):
+        cmd.extend(["--speculative-config.method", "mtp"])
+        cmd.extend(["--speculative-config.num_speculative_tokens", os.getenv("NUM_SPECULATIVE_TOKENS", "1")])
 
     max_num_seqs = os.getenv("MAX_NUM_SEQS")
     if max_num_seqs:
@@ -280,6 +279,90 @@ def save_result_if_requested(result: Any, output_dir: str | None, save_layout_vi
     )
 
 
+def estimate_cost(elapsed_seconds: float) -> float:
+    return elapsed_seconds * GPU_COST_PER_SEC
+
+
+def local_path_from_input(value: str) -> Path:
+    if value.startswith("file://"):
+        return Path(value[7:])
+    return Path(value)
+
+
+def image_input_to_url(image: str) -> str:
+    if image.startswith(("http://", "https://", "data:")):
+        return image
+    path = local_path_from_input(image)
+    suffix = path.suffix.lower()
+    mime = {
+        ".png": "image/png",
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".webp": "image/webp",
+        ".gif": "image/gif",
+        ".bmp": "image/bmp",
+        ".tiff": "image/tiff",
+        ".tif": "image/tiff",
+    }.get(suffix, "image/png")
+    data = path.read_bytes()
+    import base64
+
+    return f"data:{mime};base64,{base64.b64encode(data).decode()}"
+
+
+def render_pdf_page_to_data_url(document: str, page: int, dpi: int = SINGLE_OCR_PDF_DPI) -> str:
+    path = local_path_from_input(document)
+    pdf = pdfium.PdfDocument(str(path))
+    try:
+        if page < 1 or page > len(pdf):
+            raise ValueError(f"Page {page} out of range for {document}")
+        bitmap = pdf[page - 1].render(scale=dpi / 72).to_pil()
+        with tempfile.NamedTemporaryFile(suffix=".png") as tmp:
+            bitmap.save(tmp.name, format="PNG")
+            return image_input_to_url(tmp.name)
+    finally:
+        pdf.close()
+
+
+def build_single_ocr_payload(image_url: str, prompt: str, max_tokens: int) -> dict[str, Any]:
+    return {
+        "model": SERVED_MODEL_NAME,
+        "max_tokens": max_tokens,
+        "temperature": 0.0,
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "image_url", "image_url": {"url": image_url}},
+                    {"type": "text", "text": prompt},
+                ],
+            }
+        ],
+    }
+
+
+def perform_single_ocr(image_url: str, prompt: str, max_tokens: int) -> dict[str, Any]:
+    started = time.perf_counter()
+    response = requests.post(
+        f"{VLLM_HOST}/v1/chat/completions",
+        json=build_single_ocr_payload(image_url, prompt, max_tokens),
+        timeout=REQUEST_TIMEOUT,
+    )
+    response.raise_for_status()
+    elapsed = time.perf_counter() - started
+    payload = response.json()
+    content = ""
+    choices = payload.get("choices", [])
+    if choices:
+        content = choices[0].get("message", {}).get("content", "")
+    return {
+        "elapsed_seconds": round(elapsed, 3),
+        "estimated_cost_usd": round(estimate_cost(elapsed), 6),
+        "content": content,
+        "raw_response": payload,
+    }
+
+
 def proxy_openai_request(route: str) -> Response:
     url = f"{VLLM_HOST}{route}"
     try:
@@ -320,6 +403,39 @@ def openai_models() -> Response:
 @app.post("/openai/v1/chat/completions")
 def openai_chat_completions() -> Response:
     return proxy_openai_request("/v1/chat/completions")
+
+
+@app.post("/ocr/single")
+def ocr_single() -> tuple[Response, int] | Response:
+    if not state.ready:
+        return jsonify(state.snapshot()), 503
+
+    payload = request.get_json(silent=True) or {}
+    prompt = payload.get("prompt") or SINGLE_OCR_PROMPT
+    max_tokens = int(payload.get("max_tokens", 4096))
+    page = int(payload.get("page", 1))
+
+    image = payload.get("image")
+    document = payload.get("document")
+
+    if not image and not document:
+        return jsonify({"error": "Expected 'image' or 'document' in request body."}), 400
+
+    try:
+        if image:
+            image_url = image_input_to_url(image)
+            source = image
+        else:
+            image_url = render_pdf_page_to_data_url(document, page)
+            source = f"{document}#page={page}"
+
+        result = perform_single_ocr(image_url, prompt, max_tokens)
+        result["source"] = source
+        result["mode"] = "single"
+        result["prompt"] = prompt
+        return jsonify(result)
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
 
 
 @app.post("/glmocr/parse")
@@ -371,6 +487,7 @@ def glmocr_parse() -> tuple[Response, int] | Response:
         {
             "documents": parsed_documents,
             "summary": {
+                "mode": "document",
                 "documents": len(parsed_documents),
                 "pages": total_pages,
                 "elapsed_seconds": round(request_elapsed, 3),

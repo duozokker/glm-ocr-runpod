@@ -3,7 +3,7 @@
 Test client for the GLM-OCR service.
 
 Supports:
-  - Raw OpenAI-compatible image OCR via /openai/v1/chat/completions
+  - Single-page OCR via /ocr/single
   - Full PDF/document parsing via /glmocr/parse
   - Remote files (URL), local files, and data URLs
 
@@ -19,7 +19,6 @@ Environment (.env or exported):
 """
 
 import argparse
-import base64
 import json
 import os
 import sys
@@ -40,68 +39,23 @@ except ImportError:
     sys.exit(1)
 
 
-PROMPT_SHORTCUTS = {
-    "text": "Text Recognition:",
-    "formula": "Formula Recognition:",
-    "table": "Table Recognition:",
-}
-
-
-def image_to_base64_url(path: str) -> str:
-    p = Path(path)
-    if not p.exists():
-        print(f"Error: file not found: {path}")
-        sys.exit(1)
-
-    suffix = p.suffix.lower()
-    mime = {
-        ".png": "image/png",
-        ".jpg": "image/jpeg",
-        ".jpeg": "image/jpeg",
-        ".webp": "image/webp",
-        ".gif": "image/gif",
-        ".bmp": "image/bmp",
-        ".tiff": "image/tiff",
-        ".tif": "image/tiff",
-    }.get(suffix, "image/png")
-
-    data = base64.b64encode(p.read_bytes()).decode()
-    return f"data:{mime};base64,{data}"
-
+PROMPT_SHORTCUTS = {"text": None}
 
 def resolve_prompt(raw: str) -> str:
     return PROMPT_SHORTCUTS.get(raw.lower(), raw)
 
 
-def call_endpoint(
+def call_single_route(
     base_url: str,
     image: str,
-    prompt: str,
+    prompt: str | None,
     timeout: int = 120,
 ) -> dict:
-    """Call the OpenAI-compatible OCR route."""
-
-    if image.startswith(("http://", "https://", "data:")):
-        image_url = image
-    else:
-        image_url = image_to_base64_url(image)
-
-    payload = {
-        "model": "zai-org/GLM-OCR",
-        "max_tokens": 16384,
-        "temperature": 0.01,
-        "messages": [
-            {
-                "role": "user",
-                "content": [
-                    {"type": "image_url", "image_url": {"url": image_url}},
-                    {"type": "text", "text": prompt},
-                ],
-            }
-        ],
-    }
-
-    url = f"{base_url.rstrip('/')}/openai/v1/chat/completions"
+    """Call the single OCR route."""
+    payload = {"image": image, "max_tokens": 4096}
+    if prompt:
+        payload["prompt"] = prompt
+    url = f"{base_url.rstrip('/')}/ocr/single"
     headers = {"Content-Type": "application/json"}
     start = time.time()
     resp = requests.post(url, json=payload, headers=headers, timeout=timeout)
@@ -116,13 +70,7 @@ def call_endpoint(
     print(f"\nTotal:     {elapsed:.2f}s")
     print(f"{'='*60}")
 
-    # Standard OpenAI response format
-    choices = result.get("choices", [])
-    if choices:
-        content = choices[0].get("message", {}).get("content", "")
-        print(content)
-    else:
-        print(json.dumps(result, indent=2, ensure_ascii=False))
+    print(result.get("content", ""))
 
     return result
 
@@ -159,9 +107,9 @@ def main():
     )
     parser.add_argument(
         "--mode",
-        choices=["openai", "parse"],
-        default="openai",
-        help="openai=image OCR via vLLM, parse=full GLM-OCR pipeline",
+        choices=["single", "parse"],
+        default="single",
+        help="single=single page OCR fallback, parse=full GLM-OCR PDF pipeline",
     )
     parser.add_argument(
         "--base-url",
@@ -199,14 +147,15 @@ def main():
         return
 
     if not args.image:
-        print("Error: --image required for --mode openai")
+        print("Error: --image required for --mode single")
         sys.exit(1)
     prompt = resolve_prompt(args.prompt)
     print(f"Image:  {args.image}")
-    print(f"Prompt: {prompt}")
+    if prompt:
+        print(f"Prompt: {prompt}")
     print()
 
-    call_endpoint(base_url, args.image, prompt, args.timeout)
+    call_single_route(base_url, args.image, prompt, args.timeout)
 
 
 if __name__ == "__main__":

@@ -1,6 +1,6 @@
 {
     "title": "GLM-OCR Full Pipeline",
-    "description": "Self-hosted GLM-OCR on RunPod with the official PDF/layout pipeline, OpenAI-compatible raw OCR access, health/metrics endpoints, and model preloading for faster startup.",
+    "description": "Self-hosted GLM-OCR on RunPod with a dedicated single-page OCR route, a full PDF/layout OCR route, health/metrics endpoints, and model preloading for faster startup.",
     "type": "serverless",
     "category": "image",
     "config": {

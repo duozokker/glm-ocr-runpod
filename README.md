@@ -33,6 +33,16 @@ Returns startup phase and readiness. Suitable for load balancer health checks.
 
 Returns aggregated request, page, timing, and estimated cost statistics.
 
+### `POST /ocr/single`
+
+Fast single-page OCR for:
+
+- one image
+- one remote image URL
+- one rendered PDF page via `document + page`
+
+This route is the explicit low-complexity fallback path and uses the stronger Markdown-preserving prompt inspired by `local-ocr-workbench`.
+
 ### `POST /glmocr/parse`
 
 Runs the full GLM-OCR pipeline on a document.
@@ -52,16 +62,17 @@ You can also pass `documents` as a list.
 ### `GET /openai/v1/models`
 ### `POST /openai/v1/chat/completions`
 
-These routes proxy directly to local `vLLM` for raw model access.
+These routes remain available for raw `vLLM` access and debugging.
 
 ## Why it is simpler
 
-The serving path is intentionally narrow:
+The serving path is intentionally narrow and split into two modes:
 
 1. start `vLLM`
 2. wait for `/health`
 3. start `glmocr[selfhosted]`
-4. expose `/health`, `/metrics`, `/glmocr/parse`
+4. expose `/ocr/single` for fast single-page OCR
+5. expose `/glmocr/parse` for full PDF/layout OCR
 
 No second OCR provider, no MaaS dependency, no queue worker protocol, no browser-only PDF tricks.
 
@@ -143,6 +154,22 @@ The benchmark report includes:
 - estimated cost per document
 - estimated cost per 1000 documents
 - estimated cost per 1000 pages
+
+## Smoke tests
+
+Smoke-test the running service with the receipt image from the official vLLM GLM-OCR recipe:
+
+```bash
+python3 smoke_test_service.py --base-url http://127.0.0.1:8000
+```
+
+And with a local PDF as well:
+
+```bash
+python3 smoke_test_service.py \
+  --base-url http://127.0.0.1:8000 \
+  --document /Users/schayan/Dev/MandantLink-v5/knowledge/books/datev-lehrbuecher/978-3-658-11659-0.pdf
+```
 
 ## Files
 

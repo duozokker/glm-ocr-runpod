@@ -2,8 +2,8 @@
 """
 Batch-process images through the GLM-OCR HTTP service.
 
-Uses the OpenAI-compatible OCR route:
-  POST /openai/v1/chat/completions
+Uses the single-page OCR route:
+  POST /ocr/single
 
 Usage:
   python batch_process.py ./documents/
@@ -74,32 +74,19 @@ def process_image(
     """Send a single image to RunPod and return the result."""
     image_url = image_to_base64_url(image_path)
 
-    payload = {
-        "model": "zai-org/GLM-OCR",
-        "max_tokens": 16384,
-        "temperature": 0.01,
-        "messages": [
-            {
-                "role": "user",
-                "content": [
-                    {"type": "image_url", "image_url": {"url": image_url}},
-                    {"type": "text", "text": prompt},
-                ],
-            }
-        ],
-    }
+    payload = {"image": image_url, "max_tokens": 4096}
+    if prompt and prompt != "text":
+        payload["prompt"] = prompt
 
-    url = f"{base_url.rstrip('/')}/openai/v1/chat/completions"
+    url = f"{base_url.rstrip('/')}/ocr/single"
     headers = {"Content-Type": "application/json"}
 
     resp = session.post(url, json=payload, headers=headers, timeout=timeout)
     resp.raise_for_status()
     result = resp.json()
 
-    choices = result.get("choices", [])
-    if choices:
-        text = choices[0].get("message", {}).get("content", "")
-    else:
+    text = result.get("content", "")
+    if not text:
         text = json.dumps(result, indent=2, ensure_ascii=False)
 
     return {"file": image_path, "text": text, "status": "ok"}
