@@ -18,7 +18,7 @@ import runpod
 VLLM_HOST = "http://localhost:8000"
 MODEL_NAME = os.getenv("MODEL_NAME", "zai-org/GLM-OCR")
 GPU_MEMORY_UTILIZATION = os.getenv("GPU_MEMORY_UTILIZATION", "0.95")
-MAX_MODEL_LEN = os.getenv("MAX_MODEL_LEN", "4096")
+MAX_MODEL_LEN = os.getenv("MAX_MODEL_LEN", "16384")
 STARTUP_TIMEOUT = int(os.getenv("STARTUP_TIMEOUT", "300"))
 
 # Shared state
