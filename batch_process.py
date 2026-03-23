@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-Batch-process images through GLM-OCR on RunPod Serverless.
+Batch-process images through the GLM-OCR HTTP service.
 
-Sends concurrent requests to RunPod's OpenAI-compatible proxy endpoint.
-RunPod auto-scales workers to handle parallel requests.
+Uses the OpenAI-compatible OCR route:
+  POST /openai/v1/chat/completions
 
 Usage:
   python batch_process.py ./documents/
@@ -11,8 +11,9 @@ Usage:
   python batch_process.py ./docs/ --concurrency 20
 
 Environment (.env or exported):
-  RUNPOD_API_KEY      - Your RunPod API key
-  RUNPOD_ENDPOINT_ID  - Your serverless endpoint ID
+  GLMOCR_BASE_URL     - Direct base URL to the service
+  RUNPOD_API_KEY      - Optional legacy RunPod API key
+  RUNPOD_ENDPOINT_ID  - Optional legacy RunPod endpoint ID
 """
 
 import argparse
@@ -65,8 +66,7 @@ def image_to_base64_url(path: Path) -> str:
 
 def process_image(
     session: requests.Session,
-    api_key: str,
-    endpoint_id: str,
+    base_url: str,
     image_path: Path,
     prompt: str,
     timeout: int = 300,
@@ -89,11 +89,8 @@ def process_image(
         ],
     }
 
-    url = f"https://api.runpod.ai/v2/{endpoint_id}/openai/v1/chat/completions"
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json",
-    }
+    url = f"{base_url.rstrip('/')}/openai/v1/chat/completions"
+    headers = {"Content-Type": "application/json"}
 
     resp = session.post(url, json=payload, headers=headers, timeout=timeout)
     resp.raise_for_status()
@@ -122,12 +119,16 @@ def main():
     parser.add_argument(
         "--concurrency", type=int, default=10, help="Max parallel requests"
     )
+    parser.add_argument("--base-url", default=os.getenv("GLMOCR_BASE_URL"))
     parser.add_argument("--api-key", default=os.getenv("RUNPOD_API_KEY"))
     parser.add_argument("--endpoint-id", default=os.getenv("RUNPOD_ENDPOINT_ID"))
     args = parser.parse_args()
 
-    if not args.api_key or not args.endpoint_id:
-        print("Error: RUNPOD_API_KEY and RUNPOD_ENDPOINT_ID required")
+    base_url = args.base_url
+    if not base_url and args.api_key and args.endpoint_id:
+        base_url = f"https://api.runpod.ai/v2/{args.endpoint_id}"
+    if not base_url:
+        print("Error: GLMOCR_BASE_URL or RUNPOD_API_KEY + RUNPOD_ENDPOINT_ID required")
         sys.exit(1)
 
     input_dir = Path(args.input_dir)
@@ -166,8 +167,7 @@ def main():
             pool.submit(
                 process_image,
                 session,
-                args.api_key,
-                args.endpoint_id,
+                base_url,
                 f,
                 prompt,
             ): f

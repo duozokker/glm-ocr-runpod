@@ -1,20 +1,21 @@
 #!/usr/bin/env python3
 """
-Test script for GLM-OCR on RunPod Serverless.
+Test client for the GLM-OCR service.
 
 Supports:
-  - Remote images (URL)
-  - Local images (auto-converted to base64)
-  - All GLM-OCR prompt types: text, formula, table, JSON schema
+  - Raw OpenAI-compatible image OCR via /openai/v1/chat/completions
+  - Full PDF/document parsing via /glmocr/parse
+  - Remote files (URL), local files, and data URLs
 
 Usage:
   python test_endpoint.py --image https://example.com/document.png
-  python test_endpoint.py --image ./invoice.jpg --prompt "table"
-  python test_endpoint.py --image ./id_card.png --prompt '{"name": "", "dob": ""}'
+  python test_endpoint.py --image ./invoice.jpg --prompt table
+  python test_endpoint.py --document ./book.pdf --mode parse
 
 Environment (.env or exported):
-  RUNPOD_API_KEY      - Your RunPod API key
-  RUNPOD_ENDPOINT_ID  - Your serverless endpoint ID
+  GLMOCR_BASE_URL      - Direct base URL to the HTTP service
+  RUNPOD_API_KEY       - Optional RunPod API key for old endpoint-id style access
+  RUNPOD_ENDPOINT_ID   - Optional RunPod endpoint ID for old endpoint-id style access
 """
 
 import argparse
@@ -73,13 +74,12 @@ def resolve_prompt(raw: str) -> str:
 
 
 def call_endpoint(
-    api_key: str,
-    endpoint_id: str,
+    base_url: str,
     image: str,
     prompt: str,
     timeout: int = 120,
 ) -> dict:
-    """Call RunPod serverless endpoint via OpenAI-compatible proxy."""
+    """Call the OpenAI-compatible OCR route."""
 
     if image.startswith(("http://", "https://", "data:")):
         image_url = image
@@ -101,14 +101,8 @@ def call_endpoint(
         ],
     }
 
-    # Use RunPod's OpenAI-compatible proxy endpoint
-    url = f"https://api.runpod.ai/v2/{endpoint_id}/openai/v1/chat/completions"
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json",
-    }
-
-    print(f"Sending request to {endpoint_id}...")
+    url = f"{base_url.rstrip('/')}/openai/v1/chat/completions"
+    headers = {"Content-Type": "application/json"}
     start = time.time()
     resp = requests.post(url, json=payload, headers=headers, timeout=timeout)
     elapsed = time.time() - start
@@ -133,44 +127,86 @@ def call_endpoint(
     return result
 
 
+def call_parse_route(base_url: str, document: str, timeout: int = 600) -> dict:
+    url = f"{base_url.rstrip('/')}/glmocr/parse"
+    payload = {"document": document, "include_results": True}
+    print(f"Sending parse request to {url}...")
+    start = time.time()
+    resp = requests.post(url, json=payload, timeout=timeout)
+    elapsed = time.time() - start
+
+    if resp.status_code != 200:
+        print(f"HTTP {resp.status_code}: {resp.text}")
+        sys.exit(1)
+
+    result = resp.json()
+    print(f"\nTotal:     {elapsed:.2f}s")
+    print(f"{'='*60}")
+    print(json.dumps(result["summary"], indent=2, ensure_ascii=False))
+    return result
+
+
 def main():
-    parser = argparse.ArgumentParser(description="Test GLM-OCR on RunPod Serverless")
+    parser = argparse.ArgumentParser(description="Test the GLM-OCR HTTP service")
     parser.add_argument(
-        "--image", required=True, help="Image path (local file or URL)"
+        "--image", help="Image path (local file or URL)"
     )
+    parser.add_argument("--document", help="Document path or URL for full parse mode")
     parser.add_argument(
         "--prompt",
         default="text",
         help='Prompt: "text", "formula", "table", or custom string/JSON schema',
     )
     parser.add_argument(
+        "--mode",
+        choices=["openai", "parse"],
+        default="openai",
+        help="openai=image OCR via vLLM, parse=full GLM-OCR pipeline",
+    )
+    parser.add_argument(
+        "--base-url",
+        default=os.getenv("GLMOCR_BASE_URL"),
+        help="Direct GLM-OCR base URL, e.g. http://127.0.0.1:8000",
+    )
+    parser.add_argument(
         "--api-key",
         default=os.getenv("RUNPOD_API_KEY"),
-        help="RunPod API key (or set RUNPOD_API_KEY env var)",
+        help="Legacy RunPod API key fallback",
     )
     parser.add_argument(
         "--endpoint-id",
         default=os.getenv("RUNPOD_ENDPOINT_ID"),
-        help="RunPod endpoint ID (or set RUNPOD_ENDPOINT_ID env var)",
+        help="Legacy RunPod endpoint ID fallback",
     )
     parser.add_argument(
         "--timeout", type=int, default=120, help="Request timeout in seconds"
     )
     args = parser.parse_args()
 
-    if not args.api_key:
-        print("Error: --api-key or RUNPOD_API_KEY required")
-        sys.exit(1)
-    if not args.endpoint_id:
-        print("Error: --endpoint-id or RUNPOD_ENDPOINT_ID required")
+    base_url = args.base_url
+    if not base_url and args.api_key and args.endpoint_id:
+        base_url = f"https://api.runpod.ai/v2/{args.endpoint_id}"
+    if not base_url:
+        print("Error: provide --base-url or RUNPOD_API_KEY + RUNPOD_ENDPOINT_ID")
         sys.exit(1)
 
+    if args.mode == "parse":
+        if not args.document:
+            print("Error: --document required for --mode parse")
+            sys.exit(1)
+        print(f"Document: {args.document}")
+        call_parse_route(base_url, args.document, args.timeout)
+        return
+
+    if not args.image:
+        print("Error: --image required for --mode openai")
+        sys.exit(1)
     prompt = resolve_prompt(args.prompt)
     print(f"Image:  {args.image}")
     print(f"Prompt: {prompt}")
     print()
 
-    call_endpoint(args.api_key, args.endpoint_id, args.image, prompt, args.timeout)
+    call_endpoint(base_url, args.image, prompt, args.timeout)
 
 
 if __name__ == "__main__":

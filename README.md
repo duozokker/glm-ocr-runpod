@@ -1,294 +1,147 @@
-# GLM-OCR on RunPod Serverless
+# GLM-OCR Full Pipeline on RunPod Load Balancing
 
-[![Runpod](https://api.runpod.io/badge/duozokker/glm-ocr-runpod)](https://console.runpod.io/hub/duozokker/glm-ocr-runpod)
+Deploy the official self-hosted [GLM-OCR](https://github.com/zai-org/GLM-OCR) pipeline on RunPod with:
 
-Deploy [GLM-OCR](https://github.com/zai-org/GLM-OCR) (0.9B) as a serverless OCR endpoint on [RunPod](https://www.runpod.io). OpenAI-compatible API, auto-scaling from 0 to 100 workers.
+- local `vLLM` for the GLM-OCR model
+- the official `glmocr[selfhosted]` pipeline for PDFs, layout detection, tables, and formulas
+- an HTTP service suitable for RunPod Load Balancing
+- health and performance metrics
+- benchmark tooling for large PDF sets
 
-## Features
+This repo is intentionally no longer a queue-based `runpod.serverless.start(...)` worker. It is built for RunPod Load Balancing endpoints where lower latency matters more than pure scale-to-zero behavior.
 
-- **Fast** — ~0.67 images/sec per worker with Multi-Token Prediction (MTP)
-- **Cheap** — significantly cheaper than Google Document AI or AWS Textract
-- **Scalable** — RunPod auto-scales 0→100 workers
-- **Zero cold-start downloads** — model weights baked into the Docker image
-- **OpenAI-compatible API** — works with the OpenAI SDK, cURL, or any HTTP client
-- **GDPR-ready** — select EU data centers, no data sent to third-party AI providers
+## Why this version
 
-## Supported OCR Modes
+The earlier queue-based design was fine for cheap image OCR, but it had three structural problems:
 
-| Prompt | Description |
-|--------|-------------|
-| `Text Recognition:` | Raw text extraction from images |
-| `Formula Recognition:` | Mathematical formula recognition |
-| `Table Recognition:` | Table structure extraction |
-| `{"field": ""}` (JSON schema) | Structured information extraction |
+1. Cold starts were unavoidable with `Active Workers = 0`.
+2. It only proxied the base OpenAI-compatible model route, not the official GLM-OCR PDF pipeline.
+3. The service did not expose request-level throughput and cost metrics.
 
-## Deploy to RunPod
+This repo fixes that by serving the official GLM-OCR self-hosted pipeline over HTTP and by preloading both required models into the image:
 
-### Prerequisites
+- `zai-org/GLM-OCR`
+- `PaddlePaddle/PP-DocLayoutV3_safetensors`
 
-- A [RunPod account](https://www.runpod.io) with API key
-- A GitHub account (repo can be public or private)
+## Endpoints
 
-### Step 1: Connect GitHub to RunPod
+### `GET /health`
 
-1. Go to [RunPod Settings](https://www.runpod.io/console/user/settings) → **Connections**
-2. Click **Connect** on the GitHub card
-3. Authorize RunPod to access your repositories
+Returns startup phase and readiness. Suitable for load balancer health checks.
 
-### Step 2: Fork this repo
+### `GET /metrics`
 
-Fork or clone this repo to your GitHub account. RunPod builds the Docker image directly from your repo.
+Returns aggregated request, page, timing, and estimated cost statistics.
 
-### Step 3: Create the endpoint
+### `POST /glmocr/parse`
 
-1. Go to [RunPod Serverless](https://www.runpod.io/console/serverless) → **New Endpoint**
-2. Under **Import Git Repository**, select your forked repo
-3. Select the `main` branch and leave the Dockerfile path as default
-4. Click **Next**
+Runs the full GLM-OCR pipeline on a document.
 
-### Step 4: Configure the endpoint
+Request body:
 
-| Setting | Recommended Value | Notes |
-|---------|------------------|-------|
-| **Endpoint Name** | `glm-ocr` | Any name you like |
-| **GPU** | RTX A4000 (16 GB) | Cheapest option that fits the 0.9B model |
-| **Active Workers** | 0 | Set to 1 if you need zero cold starts |
-| **Max Workers** | 5 | Adjust based on your volume |
-| **Idle Timeout** | 5 seconds | How long a worker stays up after the last request |
-| **FlashBoot** | Enabled | Free, reduces cold starts to ~500ms–2s |
+```json
+{
+  "document": "/path/to/file.pdf",
+  "include_results": true,
+  "save_layout_visualization": false
+}
+```
 
-5. Click **Deploy Endpoint**
+You can also pass `documents` as a list.
 
-### Step 5: Wait for the build
+### `GET /openai/v1/models`
+### `POST /openai/v1/chat/completions`
 
-The first build takes **~15–20 minutes** (10.5 GB image). Track progress in the **Builds** tab. Subsequent builds are faster thanks to layer caching.
+These routes proxy directly to local `vLLM` for raw model access.
 
-> **Tip:** To trigger a new build after pushing changes, create a [GitHub Release](https://docs.github.com/en/repositories/releasing-projects-on-github/managing-releases-in-a-repository). Standard pushes do not auto-trigger builds.
+## RunPod configuration
 
-### Step 6: Get your endpoint ID
+Use a RunPod Load Balancing endpoint, not a queue-based serverless worker.
 
-Once the build completes and a worker is running, copy your **Endpoint ID** from the endpoint details page. You'll need this for API calls.
+Recommended starting point:
 
-## Usage
+| Setting | Value |
+|---|---|
+| Endpoint Type | Load Balancing |
+| Port | `8000` |
+| Health Path | `/health` |
+| GPU | A4000 16 GB or L4 |
+| Active Workers | `0` or `1` depending on latency target |
+| Idle Timeout | `60-180s` |
+| Scaling Mode | Request count |
+| FlashBoot | Enabled |
 
-### Option A: Python test script
+Tradeoff:
+
+- `Active Workers = 0` is cheapest, but the first request after idle can still wait for boot.
+- `Active Workers = 1` gives better latency but a materially higher monthly floor cost.
+
+## Environment variables
+
+These are the most important runtime settings:
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `MODEL_NAME` | `zai-org/GLM-OCR` | GLM-OCR model |
+| `SERVED_MODEL_NAME` | `glm-ocr` | Model name exposed through `vLLM` |
+| `GPU_MEMORY_UTILIZATION` | `0.95` | vLLM memory fraction |
+| `MAX_MODEL_LEN` | `16384` | vLLM max model length |
+| `MAX_NUM_SEQS` | unset | Optional vLLM concurrency cap |
+| `SPECULATIVE_CONFIG` | `{"method":"mtp","num_speculative_tokens":1}` | Enables GLM MTP |
+| `GLMOCR_LAYOUT_DEVICE` | `cpu` | Keep GPU free for OCR inference |
+| `GPU_COST_PER_SEC` | `0.00016` | Used for cost estimation |
+| `HF_TOKEN` | unset | Optional Hugging Face token for faster/more reliable downloads |
+
+## Docker build
+
+If you want Hugging Face-authenticated downloads during build:
 
 ```bash
-cp .env.example .env
-# Edit .env with your RUNPOD_API_KEY and RUNPOD_ENDPOINT_ID
-
-pip install -r requirements.txt
-
-# Text recognition
-python test_endpoint.py --image https://example.com/document.png
-
-# Table recognition
-python test_endpoint.py --image ./invoice.jpg --prompt table
-
-# Formula recognition
-python test_endpoint.py --image ./equation.png --prompt formula
-
-# Structured extraction with JSON schema
-python test_endpoint.py --image ./id_card.png --prompt '{"name": "", "date_of_birth": "", "id_number": ""}'
+docker build --build-arg HF_TOKEN="$HF_TOKEN" -t glmocr-runpod .
 ```
 
-### Option B: Batch processing
+The image pre-downloads both GLM-OCR and the PP-DocLayout model to reduce boot time.
+
+## Local run
 
 ```bash
-# Process all images in a directory (10 concurrent requests by default)
-python batch_process.py ./documents/
-
-# Table recognition with 20 concurrent requests
-python batch_process.py ./documents/ --prompt table --concurrency 20
-
-# Results saved to ./documents/ocr_output/
+docker run --rm --gpus all \
+  -p 8000:8000 \
+  -e HF_TOKEN="$HF_TOKEN" \
+  -e GPU_COST_PER_SEC=0.00016 \
+  glmocr-runpod
 ```
 
-### Option C: cURL
+Wait until `/health` returns `200`.
+
+## Benchmarking DATEV PDFs
+
+This repo includes a benchmark script for the DATEV PDF folder:
 
 ```bash
-curl "https://api.runpod.ai/v2/YOUR_ENDPOINT_ID/openai/v1/chat/completions" \
-  -H "Authorization: Bearer YOUR_API_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "zai-org/GLM-OCR",
-    "max_tokens": 16384,
-    "messages": [{
-      "role": "user",
-      "content": [
-        {"type": "image_url", "image_url": {"url": "https://example.com/doc.png"}},
-        {"type": "text", "text": "Text Recognition:"}
-      ]
-    }]
-  }'
+python3 benchmark_datev.py \
+  --base-url http://127.0.0.1:8000 \
+  --input-dir /Users/schayan/Dev/MandantLink-v5/knowledge/books/datev-lehrbuecher \
+  --output benchmark_results.json
 ```
 
-### Option D: OpenAI SDK (Python / JavaScript)
+The benchmark report includes:
 
-The endpoint is fully OpenAI-compatible. Use the standard OpenAI SDK:
+- measured service time per document
+- pages per second
+- estimated cost per document
+- estimated cost per 1000 documents
+- estimated cost per 1000 pages
 
-```python
-from openai import OpenAI
+## Files
 
-client = OpenAI(
-    api_key="YOUR_RUNPOD_API_KEY",
-    base_url="https://api.runpod.ai/v2/YOUR_ENDPOINT_ID/openai/v1",
-)
+- [service.py](/Users/schayan/Dev/GLM-5-OCR-Runpod/service.py)
+- [glmocr.config.yaml](/Users/schayan/Dev/GLM-5-OCR-Runpod/glmocr.config.yaml)
+- [benchmark_datev.py](/Users/schayan/Dev/GLM-5-OCR-Runpod/benchmark_datev.py)
+- [Dockerfile](/Users/schayan/Dev/GLM-5-OCR-Runpod/Dockerfile)
 
-response = client.chat.completions.create(
-    model="zai-org/GLM-OCR",
-    max_tokens=16384,
-    messages=[{
-        "role": "user",
-        "content": [
-            {"type": "image_url", "image_url": {"url": "https://example.com/doc.png"}},
-            {"type": "text", "text": "Text Recognition:"},
-        ],
-    }],
-)
+## Notes
 
-print(response.choices[0].message.content)
-```
-
-```javascript
-import OpenAI from "openai";
-
-const client = new OpenAI({
-  apiKey: "YOUR_RUNPOD_API_KEY",
-  baseURL: "https://api.runpod.ai/v2/YOUR_ENDPOINT_ID/openai/v1",
-});
-
-const response = await client.chat.completions.create({
-  model: "zai-org/GLM-OCR",
-  max_tokens: 16384,
-  messages: [{
-    role: "user",
-    content: [
-      { type: "image_url", image_url: { url: "https://example.com/doc.png" } },
-      { type: "text", text: "Text Recognition:" },
-    ],
-  }],
-});
-
-console.log(response.choices[0].message.content);
-```
-
-## Performance
-
-Benchmarks from the [GLM-OCR paper](https://arxiv.org/html/2603.10910) (single GPU, single concurrency):
-
-| Input Type | Speed | Per Page |
-|------------|-------|----------|
-| Images | 0.67 images/sec | ~1.5s |
-
-> **Note:** The GLM-OCR paper also reports 1.86 PDF pages/sec for full document parsing
-> with the official SDK pipeline (including layout detection via PP-DocLayoutV3). This repo
-> serves only the base model — for full PDF pipeline performance, use the
-> [official glmocr SDK](https://github.com/zai-org/GLM-OCR).
-
-### Scaling
-
-RunPod auto-scales workers based on incoming requests:
-
-| Workers | Images/sec | Images/hour |
-|---------|-----------|-------------|
-| 1 | 0.67 | ~2,400 |
-| 10 | 6.7 | ~24,000 |
-| 50 | 33.5 | ~120,000 |
-| 100 | 67 | ~240,000 |
-
-## Cost
-
-Using RunPod A4000 (16 GB) Flex workers at $0.00016/sec:
-
-| Volume/month | Cost (compute only) |
-|-------------|---------------------|
-| 10,000 images | **~$2.40** |
-| 100,000 images | **~$24** |
-| 1,000,000 images | **~$240** |
-
-Plus ~$1.05/month for container disk storage.
-
-> **Real-world costs will be higher** than pure compute time. RunPod bills from worker
-> start to stop, including cold start (~5–30s on first request) and idle timeout. For
-> bursty or low-volume workloads, consider setting Active Workers to 1 to avoid cold
-> starts, or batch your requests to maximize worker utilization.
-
-For comparison: Google Document AI and AWS Textract charge ~$1.50 per 1,000 pages.
-
-### GPU Options
-
-| GPU | VRAM | Flex $/sec | Notes |
-|-----|------|-----------|-------|
-| **A4000** | 16 GB | $0.00016 | Best value for 0.9B model |
-| **L4** | 24 GB | $0.00019 | More VRAM headroom |
-| **A5000** | 24 GB | $0.00019 | Same tier as L4 |
-
-## GDPR / DSGVO Compliance
-
-RunPod is GDPR-compliant ([SOC 2 Type II](https://www.runpod.io/legal/compliance), [DPA](https://www.runpod.io/legal/data-processing-agreement)). To ensure compliance:
-
-1. **Select EU data center** when creating your endpoint
-2. The **DPA is automatically part of RunPod's ToS** — no separate signing needed
-3. **No data leaves RunPod** — the model runs entirely within RunPod infrastructure
-4. **No persistent storage** — vLLM processes images in-memory only
-5. **HTTPS everywhere** — all API traffic is encrypted in transit
-
-## Configuration
-
-### Environment Variables
-
-Set these in the RunPod endpoint settings to customize behavior:
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `MODEL_NAME` | `zai-org/GLM-OCR` | HuggingFace model ID |
-| `GPU_MEMORY_UTILIZATION` | `0.95` | Fraction of GPU VRAM to use |
-| `MAX_MODEL_LEN` | auto | Maximum context length |
-| `STARTUP_TIMEOUT` | `180` | Seconds to wait for vLLM to start |
-
-### Customizing vLLM Args
-
-For deeper customization, edit `handler.py` — the vLLM server command is built in `start_vllm()`. Push to GitHub and create a new release to trigger a rebuild.
-
-## How It Works
-
-```
-┌─────────────────────────────────────────────────────┐
-│  RunPod Worker Container                            │
-│                                                     │
-│  handler.py (RunPod SDK)                            │
-│    │                                                │
-│    ├── Starts vLLM server on localhost:8000          │
-│    ├── Waits for /health to return 200              │
-│    └── Forwards jobs to vLLM's OpenAI API           │
-│                                                     │
-│  vLLM Server (localhost:8000)                       │
-│    └── Serves zai-org/GLM-OCR with MTP speculation  │
-└─────────────────────────────────────────────────────┘
-```
-
-The Dockerfile:
-1. Starts from `vllm/vllm-openai:nightly` (vLLM + CUDA runtime)
-2. Installs `git`, `transformers` from main branch, and `runpod` SDK
-3. Bakes model weights (~2 GB) into the image
-4. Runs `handler.py` which starts vLLM and accepts RunPod jobs
-
-> **Reproducibility:** The build uses floating tags (`nightly`, Git HEAD). For reproducible
-> builds, pin `vllm/vllm-openai:<specific-tag>` and a transformers commit hash.
-
-## Troubleshooting
-
-| Problem | Solution |
-|---------|----------|
-| Build fails at `git` | Ensure `apt-get install git` runs before pip install |
-| `python` not found | Base image uses `python3`, not `python` |
-| vLLM pip warning about transformers | Safe to ignore — works despite vLLM pinning `<5` |
-| Cold start too slow | Enable FlashBoot + set Active Workers to 1 |
-| Out of memory | Switch from A4000 (16 GB) to L4/A5000 (24 GB) |
-| `.env` not loading | Run `pip install python-dotenv` or export vars directly |
-| Build exceeds 160 min | RunPod build limit; try a faster base image tag |
-
-## License
-
-MIT — same as [GLM-OCR](https://github.com/zai-org/GLM-OCR).
+- `GLMOCR_LAYOUT_DEVICE=cpu` is the default because on a single-GPU machine it usually improves stability by reserving GPU memory for `vLLM`.
+- If you care more about absolute throughput than stability, test `GLMOCR_LAYOUT_DEVICE=cuda`.
+- The cost numbers in `/metrics` and `benchmark_datev.py` are estimates from measured processing time and your configured `GPU_COST_PER_SEC`. They do not include idle time or RunPod control-plane overhead.
